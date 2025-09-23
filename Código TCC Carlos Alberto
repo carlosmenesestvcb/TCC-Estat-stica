@@ -1,0 +1,259 @@
+###########################################################
+# PROJETO APRENDIZADO DE MÁQUINA - TCC
+# Autor: [Carlos Alberto Alves de Meneses]
+# Observação: Altere o caminho dos arquivos "Portuguese.csv"
+# e "maths.csv" de acordo com o diretório onde eles estiverem
+# salvos na sua máquina.
+# Linguagem utilizada: R (RMarkdown)
+###########################################################
+
+##########################
+## PROJETO: PORTUGUÊS
+##########################
+
+# Carregando base de dados de português
+library(readr)
+df_por <- read_csv("Portuguese.csv")  
+attach(df_por)  # não é essencial, mas facilita chamada das variáveis
+
+# Carregando pacotes necessários
+library(tidymodels)  # modelagem e machine learning
+library(tidyverse)   # manipulação de dados
+library(DescTools)   # funções estatísticas adicionais
+library(skimr)       # resumo estatístico
+library(DataExplorer) # exploração de dados
+library(visdat)      # visualização da estrutura dos dados
+library(corrplot)    # correlação em gráfico
+library(GGally)      # gráficos adicionais (pair plots, etc.)
+
+set.seed(42) # fixando semente para reprodutibilidade
+
+# Visualização inicial dos dados
+df_por
+
+# Removendo as variáveis G1 e G2 (notas intermediárias) para prever apenas G3
+df_por1 <- df_por[,-c(31,32)]
+
+# Resumo estatístico das variáveis
+skim(df_por1)
+
+# Visualização geral do dataset
+df_por1 %>% DataExplorer::plot_intro()
+
+# Análise exploratória de variáveis categóricas
+df_por1 %>%
+  inspectdf::inspect_cat() %>%
+  inspectdf::show_plot()
+
+# Matriz de correlação entre variáveis numéricas
+df_por1 %>% 
+  select_if(is.numeric) %>%
+  cor(use = "complete.obs") %>%
+  corrplot(method = "color", type = "upper")
+
+# Divisão treino (80%) e teste (20%) estratificada pela variável resposta G3
+df_split = initial_split(df_por1, prop = .8, strata = G3)
+df_trn = training(df_split)
+df_tst = testing(df_split)
+
+# Checando dimensões
+dim(df_trn)
+dim(df_tst)
+
+# Validação cruzada k-folds
+df_vfolds = vfold_cv(df_trn, v = 5, repeats = 1, strata = G3)
+
+# Pré-processamento: imputação, normalização e dummies
+df_recipe = recipe(G3 ~ ., data = df_trn)%>%
+  step_impute_knn(all_predictors()) %>%
+  step_normalize(all_numeric_predictors())%>%
+  step_dummy(all_nominal_predictors())
+
+# Modelos testados ----------------------------------------
+
+# Regressão Linear
+lm_fit1 = linear_reg() %>%
+  set_mode("regression") %>%
+  set_engine("lm")
+
+# Elastic Net (com penalização)
+lm_fit2 = linear_reg(penalty = tune(), mixture = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("glmnet")
+
+# Random Forest
+rf_fit = rand_forest(mtry = tune(), min_n = tune(), trees = 100) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+
+# SVM Linear
+svm_fit1 = svm_linear(cost = tune(), margin = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("kernlab")
+
+# SVM com kernel radial
+svm_fit2 = svm_rbf(cost = tune(), rbf_sigma = tune(), margin = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("kernlab")
+
+# Rede Neural Perceptron Multicamadas
+mlp_fit = mlp(hidden_units = tune(), penalty = tune(), epochs = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("nnet")
+
+# XGBoost
+xgb_fit = boost_tree(tree_depth = tune(), learn_rate = tune(),
+                     loss_reduction = tune(), min_n = tune(),
+                     sample_size = tune(), trees = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("xgboost")
+
+# Conjunto de workflows com todos os modelos
+wf = workflow_set(
+  preproc = list(df_recipe),
+  models = list(linear_model = lm_fit1,
+                elasticnet = lm_fit2,
+                random_forest = rf_fit,
+                linear_svm = svm_fit1,
+                kernel_svm = svm_fit2,
+                neural_networks = mlp_fit,
+                xg_boost = xgb_fit)) %>%
+  mutate(wflow_id = gsub("(recipe_)", "", wflow_id))
+
+# Configuração do grid search
+grid_ctrl = control_grid(
+  save_pred = TRUE,
+  parallel_over = "everything",
+  save_workflow = TRUE
+)
+
+# Treinando e avaliando os modelos via grid search
+grid_results = wf %>%
+  workflow_map(resamples = df_vfolds,grid = 5,control = grid_ctrl)
+
+# Visualizações dos resultados
+autoplot(grid_results)
+autoplot(grid_results, rank_metric = "rmse", metric = "rmse", select_best = TRUE)
+
+# Selecionando o melhor modelo (Random Forest, nesse caso)
+best_results = grid_results %>% 
+   extract_workflow_set_result("random_forest") %>% 
+   select_best(metric = "rmse")
+
+# Avaliando no conjunto de teste
+test_results = grid_results %>% 
+   extract_workflow("random_forest") %>% 
+   finalize_workflow(best_results) %>% 
+   last_fit(split = df_split)
+
+# Métricas finais
+collect_metrics(test_results)
+
+# Erro médio normalizado
+rm_se = 2.6251399
+rm_se_nor = rm_se/(max(df_por1$G3) - min(df_por1$G3))
+rm_se_nor
+
+# Gráfico Observado vs Predito
+test_results %>% 
+   collect_predictions() %>% 
+   ggplot(aes(x = G3, y = .pred)) + 
+   geom_abline(color = "gray50", lty = 2) + 
+   geom_point(alpha = 0.5) + 
+   coord_obs_pred() + 
+   labs(x = "Observado", y = "Predito")
+
+
+##########################
+## PROJETO: MATEMÁTICA
+##########################
+
+# Estrutura idêntica ao anterior, aplicada à base de Matemática
+# Atenção: ajuste o caminho do arquivo "maths.csv"
+
+library(readr)
+df_mat <- read_csv("maths.csv")
+attach(df_mat)
+
+# Carregando pacotes novamente (boa prática seria criar um bloco único no topo)
+library(tidymodels)
+library(tidyverse)
+library(DescTools)
+library(skimr)
+library(DataExplorer)
+library(visdat)
+library(corrplot)
+library(GGally)
+
+set.seed(42)
+
+# Visualização inicial
+df_mat
+
+# Excluindo G1 e G2
+df_mat1 <- df_mat[,-c(31,32)]
+
+# Resumo dos dados
+skim(df_mat1)
+
+# Gráficos de exploração
+df_mat1 %>% DataExplorer::plot_intro()
+df_mat1 %>% inspectdf::inspect_cat() %>% inspectdf::show_plot()
+df_mat1 %>% 
+  select_if(is.numeric) %>%
+  cor(use = "complete.obs") %>%
+  corrplot(method = "color", type = "upper")
+
+# Split treino e teste
+set.seed(42)
+df_split = initial_split(df_mat1, prop = .8, strata = G3)
+df_trn = training(df_split)
+df_tst = testing(df_split)
+
+dim(df_trn)
+dim(df_tst)
+
+# Pré-processamento
+df_recipe = recipe(G3 ~ ., data = df_trn)%>%
+  step_impute_knn(all_predictors()) %>%
+  step_normalize(all_numeric_predictors())%>%
+  step_dummy(all_nominal_predictors())
+
+# (Mesmos modelos definidos anteriormente...)
+# Para economizar espaço, não repito todos aqui,
+# mas a lógica é idêntica à do projeto de Português.
+
+# Grid Search + Seleção do Melhor Modelo
+grid_results = wf %>%
+  workflow_map(resamples = df_vfolds,grid = 5,control = grid_ctrl)
+
+# Visualizações
+autoplot(grid_results)
+autoplot(grid_results, rank_metric = "rmse", metric = "rmse", select_best = TRUE)
+
+# Melhor modelo
+best_results = grid_results %>% 
+   extract_workflow_set_result("random_forest") %>% 
+   select_best(metric = "rmse")
+
+test_results = grid_results %>% 
+   extract_workflow("random_forest") %>% 
+   finalize_workflow(best_results) %>% 
+   last_fit(split = df_split)
+
+# Métricas finais
+collect_metrics(test_results)
+
+# Erro normalizado
+er = 4.1934270
+er_nor = er/(max(df_mat1$G3) - min(df_mat1$G3))
+er_nor
+
+# Gráfico Observado vs Predito
+test_results %>% 
+   collect_predictions() %>% 
+   ggplot(aes(x = G3, y = .pred)) + 
+   geom_abline(color = "gray50", lty = 2) + 
+   geom_point(alpha = 0.5) + 
+   coord_obs_pred() + 
+   labs(x = "Observado", y = "Predito")
